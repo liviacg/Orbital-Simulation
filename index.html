@@ -843,13 +843,13 @@
             moon: {
                 massMin: 1e18, massMax: 1e23, massStep: 1e18, massDefault: 7.35e22,
                 radiusMin: 100, radiusMax: 5000, radiusStep: 10, radiusDefault: 1737,
-                dragCdDefault: 0.1, areaDefault: 9500000,
+                dragCdDefault: 0.0, areaDefault: 9500000,
                 label: "Natural Moon Class: 10¹⁸ kg to 10²³ kg"
             },
             planet: {
                 massMin: 1e22, massMax: 1e25, massStep: 1e22, massDefault: 6.42e23,
                 radiusMin: 500, radiusMax: 15000, radiusStep: 50, radiusDefault: 3389,
-                dragCdDefault: 0.1, areaDefault: 36000000,
+                dragCdDefault: 0.0, areaDefault: 36000000,
                 label: "Secondary Planet Class: 10²² kg to 10²⁵ kg"
             },
             asteroid: {
@@ -1067,16 +1067,13 @@
             const isLargeBody = (type === 'moon' || type === 'planet' || type === 'asteroid');
             const satRadiusMeters = isLargeBody ? radiusValue * 1000 : radiusValue;
 
-            // Direct pixel size calculation from true meters
             let truePixelR = satRadiusMeters * scalePxPerMeter;
 
-            // Smooth logarithmic visual scaling so that both 10m ISS and 1,737km Moon respond visually to the slider
             let visualR;
             if (isLargeBody) {
                 visualR = Math.max( truePixelR, Math.log10(satRadiusMeters + 1) * 3 * Math.sqrt(zoomLevel) );
                 visualR = Math.max(6, Math.min(250, visualR));
             } else {
-                // For spacecraft/probes, map radius range (1m - 200m) to a dynamic pixel radius (6px - 45px)
                 const minR = SATELLITE_MODEL_CONFIGS[type]?.radiusMin || 1;
                 const maxR = SATELLITE_MODEL_CONFIGS[type]?.radiusMax || 200;
                 const norm = Math.max(0, Math.min(1, (radiusValue - minR) / (maxR - minR)));
@@ -1158,7 +1155,12 @@
             const satMass = parseFloat(state.satMass);
             const mu = G * (M + satMass);
 
-            const r = Math.sqrt(simPos.x * simPos.x + simPos.y * simPos.y);
+            let r = Math.sqrt(simPos.x * simPos.x + simPos.y * simPos.y);
+            if (isNaN(r) || r === 0 || isNaN(simVel.x) || isNaN(simVel.y)) {
+                resetOrbitState();
+                return;
+            }
+
             const R_m = parseFloat(state.radius) * 1000;
             const alt_m = r - R_m;
 
@@ -1202,13 +1204,9 @@
             simPos.x += simVel.x * dt;
             simPos.y += simVel.y * dt;
 
-            // Surface collision handling
+            // Surface collision handling (Safe clean reset to prevent freezing)
             if (alt_m <= 0) {
-                const angle = Math.atan2(simPos.y, simPos.x);
-                simPos.x = Math.cos(angle) * (R_m + 1000);
-                simPos.y = Math.sin(angle) * (R_m + 1000);
-                simVel.x = -Math.sin(angle) * Math.sqrt(mu / R_m) * 0.3;
-                simVel.y = Math.cos(angle) * Math.sqrt(mu / R_m) * 0.3;
+                resetOrbitState();
             }
 
             // Telemetry Computations
@@ -1285,9 +1283,10 @@
                 fpsTimer = now;
             }
 
-            // Step Physics
+            // Step Physics with realistic time synchronization (1 real second = 1 simulation second at 1x warp)
+            const timeScaleFactor = 1.0; 
             const subSteps = 10;
-            const dtStep = (delta * timeWarp * 80) / subSteps;
+            const dtStep = (delta * timeWarp * timeScaleFactor) / subSteps;
             for (let i = 0; i < subSteps; i++) {
                 stepPhysics(dtStep);
             }
@@ -1313,8 +1312,9 @@
             const centerX = canvas.width / 2 + panOffset.x;
             const centerY = canvas.height / 2 + panOffset.y;
 
-            const scalePxPerMeter = (90 * zoomLevel) / (parseFloat(state.radius) * 1000);
-            const visualPlanetRadius = parseFloat(state.radius) * 1000 * scalePxPerMeter;
+            const baseScale = 120 / (6371 * 1000);
+            const scalePxPerMeter = zoomLevel * baseScale;
+            const visualPlanetRadius = (parseFloat(state.radius) * 1000) * scalePxPerMeter;
 
             // Trajectory Trail
             if (trail.length > 1) {
@@ -1432,7 +1432,6 @@
 
         // Master UI update to sync all input elements across sidebar controls
         function updateUIFromState() {
-            // Planet Mass Sync Across All 3 Controls
             const logMass = Math.log10(state.mass);
             sliderMass.value = logMass;
             numEarthMult.value = (state.mass / EARTH_MASS_KG).toFixed(3);
@@ -1441,33 +1440,26 @@
             }
             document.getElementById('mass-sci-val').textContent = state.mass.toExponential(3) + ' kg';
 
-            // Planet Radius Sync
             sliderRadius.value = state.radius;
             numRadius.value = state.radius;
 
-            // Altitude Sync
             sliderAlt.value = state.altitude;
             numAlt.value = state.altitude;
 
-            // Satellite Mass Sync
             sliderSatMass.value = state.satMass;
             numSatMass.value = state.satMass;
 
-            // Satellite Radius Sync
             sliderSatRadius.value = state.satRadius;
             numSatRadius.value = state.satRadius;
 
-            // Drag Sync
             sliderDrag.value = state.dragCd;
             numDrag.value = state.dragCd;
 
-            // Area Sync
             sliderArea.value = state.area;
             numArea.value = state.area;
 
             sliderAtmoScale.value = state.atmoScale;
 
-            // Compute Planet Density
             computePlanetDensity();
         }
 
@@ -1479,7 +1471,6 @@
             setCustomPresetActive();
             resetOrbitState();
 
-            // Sync other 2 mass controls without overwriting active editing field directly
             if (source !== 'slider') {
                 sliderMass.value = Math.log10(state.mass);
             }
@@ -1494,7 +1485,6 @@
             computePlanetDensity();
         }
 
-        // a) Multiplier Input
         numEarthMult.addEventListener('input', (e) => {
             const mult = parseFloat(e.target.value);
             if (!isNaN(mult) && mult > 0) {
@@ -1502,14 +1492,12 @@
             }
         });
 
-        // b) Mass Slider Input
         sliderMass.addEventListener('input', (e) => {
             const logVal = parseFloat(e.target.value);
             setPlanetMassAndSync(Math.pow(10, logVal), 'slider');
             updateToastInsight(`Central Mass M set to ${state.mass.toExponential(2)} kg. Higher planet mass increases gravity and orbital speed.`);
         });
 
-        // c) Direct Mass Typing Box
         numMassDirect.addEventListener('change', (e) => {
             const val = parseFloat(e.target.value);
             if (!isNaN(val) && val > 0) {
@@ -1517,13 +1505,14 @@
             }
         });
 
-        // RADIUS INPUT & SLIDER SYNC
+        // RADIUS INPUT & SLIDER SYNC (Maintains altitude input precisely, recircularizing at the exact input altitude)
         sliderRadius.addEventListener('input', (e) => {
             state.radius = parseFloat(e.target.value);
             numRadius.value = state.radius;
             setCustomPresetActive();
-            resetOrbitState();
+            resetOrbitState(); // Re-circularize at current altitude with new planet radius
             computePlanetDensity();
+            updateToastInsight(`Planet Radius R = ${state.radius.toLocaleString()} km. Orbit circularized at altitude h = ${state.altitude.toLocaleString()} km.`);
         });
 
         numRadius.addEventListener('change', (e) => {
@@ -1660,7 +1649,6 @@
         document.getElementById('satellite-type-select').addEventListener('change', (e) => {
             const satType = e.target.value;
 
-            // If switching to Moon/Planet, set realistic orbital distance and camera zoom
             if (satType === 'moon') {
                 state.altitude = 384400;
                 zoomLevel = 0.035;
